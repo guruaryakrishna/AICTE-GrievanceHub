@@ -1,0 +1,333 @@
+// Prisma schema for AICTE Integrated Institution Complaint Monitoring System
+// DATABASE NOTE: SQLite is used in this environment because PostgreSQL/Docker are not
+// available. The schema is deliberately portable to PostgreSQL (see docs/ARCHITECTURE.md).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                String   @id @default(uuid())
+  email             String   @unique
+  passwordHash      String
+  firstName         String
+  lastName          String
+  role              String   @default("READ_ONLY")
+  isActive          Boolean  @default(true)
+  bureauId          String?
+  bureau            Bureau?  @relation(fields: [bureauId], references: [id])
+  regionId          String?
+  region            Region?  @relation(fields: [regionId], references: [id])
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  assignedCases       Case[]   @relation("AssignedOfficer")
+  createdCases        Case[]   @relation("CreatedBy")
+  actions             CaseActionHistory[]
+  notifications       Notification[]
+  alertReviews        AlertReview[]
+  auditEvents         AuditEvent[]
+  identityResolutions InstitutionResolution[] @relation("IdentityResolvedBy")
+
+  @@index([email])
+  @@index([role])
+  @@index([bureauId])
+  @@index([regionId])
+}
+
+model Bureau {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  type        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users       User[]
+  cases       Case[]
+}
+
+model Region {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  states      String   // comma-separated for SQLite portability
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  users        User[]
+  institutions Institution[]
+}
+
+model Institution {
+  id                String   @id @default(uuid())
+  aictePermanentId  String   @unique
+  name              String
+  normalizedName    String
+  alternateNames    String?  // JSON array string
+  institutionType   String?
+  address           String?
+  city              String?
+  district          String?
+  state             String?
+  regionId          String?
+  region            Region?  @relation(fields: [regionId], references: [id])
+  pinCode           String?
+  contactDetails    String?  // JSON string
+  isActive          Boolean  @default(true)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  aliases             InstitutionAlias[]
+  cases               Case[]
+  alerts              OverlapAlert[]
+  identityResolutions InstitutionResolution[]
+
+  @@index([aictePermanentId])
+  @@index([normalizedName])
+  @@index([regionId])
+}
+
+model InstitutionAlias {
+  id              String      @id @default(uuid())
+  institutionId   String
+  institution     Institution @relation(fields: [institutionId], references: [id], onDelete: Cascade)
+  alias           String
+  normalizedAlias String
+  createdAt       DateTime    @default(now())
+
+  @@index([institutionId])
+  @@index([normalizedAlias])
+}
+
+model ComplaintCategory {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  code        String   @unique
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  cases       Case[]
+  slaRules    SLARule[]
+}
+
+model Case {
+  id                      String            @id @default(uuid())
+  caseNumber              String            @unique
+  institutionId           String?
+  institution             Institution?      @relation(fields: [institutionId], references: [id])
+  originalInstitutionName String?
+  dateReceived            DateTime          @default(now())
+  title                   String
+  description             String
+  categoryId              String
+  category                ComplaintCategory @relation(fields: [categoryId], references: [id])
+  priority                String            @default("MEDIUM")
+  status                  String            @default("RECEIVED")
+  currentBureauId         String?
+  currentBureau           Bureau?           @relation(fields: [currentBureauId], references: [id])
+  assignedOfficerId       String?
+  assignedOfficer         User?             @relation("AssignedOfficer", fields: [assignedOfficerId], references: [id])
+  createdById             String
+  createdBy               User              @relation("CreatedBy", fields: [createdById], references: [id])
+  lastAction              String?
+  lastActionDate          DateTime?
+  nextRequiredAction      String?
+  nextActionDueDate       DateTime?
+  expectedDisposalDate    DateTime?
+  slaDueDate              DateTime?
+  resolutionRemarks       String?
+  disposedAt              DateTime?
+  reopenedAt              DateTime?
+  reopenReason            String?
+  transferredFromBureauId String?
+  escalatedAt             DateTime?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  actionHistory           CaseActionHistory[]
+  alerts                  CaseAlert[]
+  identityResolution      InstitutionResolution?
+
+  @@index([caseNumber])
+  @@index([institutionId])
+  @@index([status])
+  @@index([currentBureauId])
+  @@index([assignedOfficerId])
+  @@index([categoryId])
+  @@index([dateReceived])
+  @@index([nextActionDueDate])
+}
+
+model CaseActionHistory {
+  id            String   @id @default(uuid())
+  caseId        String
+  case          Case     @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  actionType    String
+  performedById String
+  performedBy   User     @relation(fields: [performedById], references: [id])
+  bureauId      String?
+  previousValue String?
+  newValue      String?
+  remarks       String?
+  metadata      String?  // JSON string
+  alertId       String?
+  timestamp     DateTime @default(now())
+
+  @@index([caseId])
+  @@index([performedById])
+  @@index([actionType])
+  @@index([timestamp])
+}
+
+model OverlapAlert {
+  id                    String    @id @default(uuid())
+  alertType             String
+  status                String    @default("NEW")
+  institutionId         String?
+  institution           Institution? @relation(fields: [institutionId], references: [id])
+  caseKey               String?   @unique // stable dedupe key
+  detectionReason       String
+  confidence            Float?
+  similarityScore       Float?
+  evidence              String?   // JSON string
+  assignedCoordinatorId String?
+  firstDetectedAt       DateTime  @default(now())
+  lastEvaluatedAt       DateTime  @default(now())
+  resolvedAt            DateTime?
+  dismissalReason       String?
+  resolutionOutcome     String?
+  reviewerRemarks       String?
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  cases         CaseAlert[]
+  reviews       AlertReview[]
+  notifications Notification[]
+
+  @@index([status])
+  @@index([alertType])
+  @@index([institutionId])
+  @@index([firstDetectedAt])
+}
+
+model CaseAlert {
+  id        String       @id @default(uuid())
+  caseId    String
+  case      Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  alertId   String
+  alert     OverlapAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([caseId, alertId])
+  @@index([caseId])
+  @@index([alertId])
+}
+
+model AlertReview {
+  id           String       @id @default(uuid())
+  alertId      String
+  alert        OverlapAlert @relation(fields: [alertId], references: [id], onDelete: Cascade)
+  reviewedById String
+  reviewedBy   User         @relation(fields: [reviewedById], references: [id])
+  action       String
+  remarks      String?
+  outcome      String?
+  timestamp    DateTime     @default(now())
+
+  @@index([alertId])
+  @@index([reviewedById])
+}
+
+model InstitutionResolution {
+  id                        String       @id @default(uuid())
+  caseId                    String       @unique
+  case                      Case         @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  submittedName             String
+  submittedAictePermanentId String?
+  status                    String       @default("PENDING") // PENDING | RESOLVED | DISMISSED
+  candidateEvidence         String?      // JSON string
+  resolvedInstitutionId     String?
+  resolvedInstitution       Institution? @relation(fields: [resolvedInstitutionId], references: [id])
+  resolvedById              String?
+  resolvedBy                User?        @relation("IdentityResolvedBy", fields: [resolvedById], references: [id])
+  resolutionNote            String?
+  resolvedAt                DateTime?
+  createdAt                 DateTime     @default(now())
+  updatedAt                 DateTime     @updatedAt
+
+  @@index([status])
+  @@index([resolvedInstitutionId])
+  @@index([resolvedById])
+}
+
+model SLARule {
+  id                        String             @id @default(uuid())
+  name                      String
+  categoryId                String?
+  category                  ComplaintCategory? @relation(fields: [categoryId], references: [id])
+  bureauId                  String?
+  priority                  String?
+  slaDurationHours          Int
+  warningThresholdHours     Int
+  escalationThresholdHours  Int
+  isActive                  Boolean            @default(true)
+  isDemonstration           Boolean            @default(true)
+  createdAt                 DateTime           @default(now())
+  updatedAt                 DateTime           @updatedAt
+
+  @@index([categoryId])
+  @@index([bureauId])
+}
+
+model Notification {
+  id        String       @id @default(uuid())
+  userId    String
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String
+  title     String
+  message   String
+  link      String?
+  alertId   String?
+  alert     OverlapAlert? @relation(fields: [alertId], references: [id])
+  caseId    String?
+  // Deduplication is scoped to the recipient: the same underlying event may
+  // notify several users, but each recipient receives it at most once.
+  dedupeKey String?
+  isRead    Boolean      @default(false)
+  readAt    DateTime?
+  createdAt DateTime     @default(now())
+
+  @@unique([userId, dedupeKey])
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
+
+model AuditEvent {
+  id         String   @id @default(uuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id])
+  action     String
+  entityType String
+  entityId   String
+  ipAddress  String?
+  userAgent  String?
+  details    String?  // JSON string
+  timestamp  DateTime @default(now())
+
+  @@index([userId])
+  @@index([entityType])
+  @@index([entityId])
+  @@index([timestamp])
+}
